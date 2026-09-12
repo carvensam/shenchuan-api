@@ -12,6 +12,60 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+// 啟動時自動建立數據庫結構（冇 Render Shell 都可以自我修復）
+async function initDb() {
+  try {
+    await pool.query(`CREATE TABLE IF NOT EXISTS games (
+      id TEXT PRIMARY KEY,
+      date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      player1_name TEXT, player2_name TEXT, winner_id INTEGER,
+      total_drinks1 INTEGER DEFAULT 0, total_drinks2 INTEGER DEFAULT 0,
+      total_ships1 INTEGER DEFAULT 0, total_ships2 INTEGER DEFAULT 0,
+      total_beds INTEGER DEFAULT 0, total_small_beds INTEGER DEFAULT 0,
+      dimsum1 NUMERIC DEFAULT 0, dimsum2 NUMERIC DEFAULT 0,
+      no_ship_bonus1 INTEGER DEFAULT 0, no_ship_bonus2 INTEGER DEFAULT 0,
+      declined_drinks1 INTEGER DEFAULT 0, declined_drinks2 INTEGER DEFAULT 0,
+      shrimp_earned NUMERIC DEFAULT 0, beef_earned NUMERIC DEFAULT 0,
+      final_score1 INTEGER DEFAULT 0, final_score2 INTEGER DEFAULT 0,
+      highest_score INTEGER DEFAULT 0, lowest_pre_down_score INTEGER DEFAULT 0,
+      max_drinks_in_round INTEGER DEFAULT 0,
+      use_bb BOOLEAN DEFAULT FALSE, is_overseas BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS sync_log (
+      id SERIAL PRIMARY KEY, device_id TEXT,
+      last_sync TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    // ON CONFLICT (device_id) 需要唯一索引
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS sync_log_device_id_idx ON sync_log (device_id)`);
+    await pool.query(`CREATE TABLE IF NOT EXISTS app_settings (
+      id INTEGER PRIMARY KEY DEFAULT 1,
+      player1_name TEXT DEFAULT '船員一', player2_name TEXT DEFAULT '船員二',
+      player1_photo TEXT, player2_photo TEXT,
+      use_bb_variant BOOLEAN DEFAULT FALSE,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`);
+    await pool.query(`INSERT INTO app_settings (id, player1_name, player2_name, use_bb_variant)
+      VALUES (1, '船員一', '船員二', FALSE) ON CONFLICT (id) DO NOTHING`);
+    console.log('數據庫結構就緒');
+    return true;
+  } catch (err) {
+    console.error('數據庫初始化失敗:', err.message);
+    return false;
+  }
+}
+
+// 數據庫健康檢查（手機可以睇到係咪數據庫問題）
+app.get('/api/health/db', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    const r = await pool.query('SELECT count(*) FROM games');
+    res.json({ db: 'ok', games: parseInt(r.rows[0].count) });
+  } catch (err) {
+    res.status(500).json({ db: 'error', detail: err.message });
+  }
+});
+
 // Health check
 app.get('/', (req, res) => {
   res.json({ message: '神船 API 運行中', time: new Date().toISOString() });
@@ -232,7 +286,7 @@ app.post('/api/sync/upload', async (req, res) => {
     res.json({ success: true, uploaded: games.length });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to sync' });
+    res.status(500).json({ error: 'Failed to sync', detail: err.message });
   }
 });
 
@@ -243,7 +297,7 @@ app.get('/api/sync/download', async (req, res) => {
     res.json({ success: true, games: gamesResult.rows });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: 'Failed to download' });
+    res.status(500).json({ error: 'Failed to download', detail: err.message });
   }
 });
 
@@ -311,6 +365,8 @@ app.delete('/api/games/:id', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`神船 API 伺服器運行於端口 ${PORT}`);
+initDb().then((ok) => {
+  app.listen(PORT, () => {
+    console.log(`神船 API 伺服器運行於端口 ${PORT}（數據庫: ${ok ? '正常' : '異常'}）`);
+  });
 });
